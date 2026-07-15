@@ -8,7 +8,7 @@ app.MapGet("/", () => Results.Ok(new
 {
     service = ServiceName,
     version,
-    status = "running"
+    status = "running version updated"
 }));
 
 app.MapGet("/health", () => Results.Ok(new
