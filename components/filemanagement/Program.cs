@@ -14,7 +14,7 @@ app.MapGet("/", () => Results.Ok(new
 app.MapGet("/health", () => Results.Ok(new
 {
     service = ServiceName,
-    status = "healthy"
+    status = "healthy-good"
 }));
 
 app.MapGet("/files/{id}", (string id) => Results.Ok(new
