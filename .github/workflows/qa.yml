@@ -1,0 +1,69 @@
+name: Promote to QA
+
+# Manually triggered. Promotes an already-built, already-signed release
+# image into the qa environment by relabeling it — this workflow contains
+# no docker build step of any kind. It is capable of promoting any of the
+# three microservices, selected at dispatch time.
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service to promote"
+        required: true
+        type: choice
+        options:
+          - enrollment
+          - filemanagement
+          - reporting
+      version:
+        description: "Release version already built, e.g. 1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: qa
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retag the release image for qa (no rebuild)
+        run: |
+          SOURCE="ghcr.io/${{ github.repository }}/${{ inputs.service }}:${{ inputs.version }}"
+          TARGET="ghcr.io/${{ github.repository }}/${{ inputs.service }}:qa-${{ inputs.version }}"
+          docker pull "$SOURCE"
+          docker tag "$SOURCE" "$TARGET"
+          docker push "$TARGET"
+
+      - name: Deploy to qa (simulated)
+        run: |
+          echo "Simulating deployment of ${{ inputs.service }}:qa-${{ inputs.version }} to the qa environment."
+          echo "No real infrastructure is targeted by this demo pipeline."
+
+      - name: Install manifest tooling
+        run: pip install --quiet pyyaml
+
+      - name: Update manifests/qa.yaml
+        run: python3 scripts/update_manifest.py qa "${{ inputs.service }}" "${{ inputs.version }}"
+
+      - name: Commit manifest update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifests/qa.yaml
+          git commit -m "chore(qa): promote ${{ inputs.service }} ${{ inputs.version }} to qa"
+          git push

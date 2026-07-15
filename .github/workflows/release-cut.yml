@@ -1,0 +1,75 @@
+name: Release Cut
+
+# Manually triggered. Cuts one generic release/x.y.z branch across the
+# whole repository and builds every microservice under that single version
+# number, regardless of whether each one individually changed. This is the
+# only place a release version is assigned; every later promotion only
+# ever relabels what is built here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version for this cut, e.g. 1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  cut-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Create the release branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git branch "release/${{ inputs.version }}"
+          git push origin "release/${{ inputs.version }}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build, sign, and push every service under this release version
+        run: |
+          for svc in enrollment filemanagement reporting; do
+            echo "Building $svc for release ${{ inputs.version }}"
+            docker build -t "ghcr.io/${{ github.repository }}/$svc:${{ inputs.version }}" "components/$svc"
+
+            echo "Simulating cosign signature for $svc:${{ inputs.version }}"
+            echo "  (a real pipeline signs the digest here with Sigstore/cosign before it is ever pushed)"
+
+            docker push "ghcr.io/${{ github.repository }}/$svc:${{ inputs.version }}"
+          done
+
+      - name: Deploy release build to dev as a final sanity check (simulated)
+        run: |
+          for svc in enrollment filemanagement reporting; do
+            echo "Simulating sanity-check deployment of $svc:${{ inputs.version }} to dev."
+          done
+
+      - name: Install manifest tooling
+        run: pip install --quiet pyyaml
+
+      - name: Record this release in the dev manifest
+        run: |
+          for svc in enrollment filemanagement reporting; do
+            python3 scripts/update_manifest.py dev "$svc" "${{ inputs.version }}"
+          done
+
+      - name: Commit manifest update to main
+        run: |
+          git add manifests/dev.yaml
+          git commit -m "chore(release): cut ${{ inputs.version }} — all services sanity-checked in dev"
+          git push origin HEAD:main
