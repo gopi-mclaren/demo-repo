@@ -1,8 +1,8 @@
 environment: dev
-last_updated: '2026-07-15T06:00:45Z'
+last_updated: '2026-07-15T06:51:15Z'
 services:
   enrollment:
-    version: dev-86f360c8ddaf3b60f61940a2e81e1cd5b1a78454
+    version: dev-0.0.3-3e09838
     digest: simulated-digest-demo
   filemanagement:
     version: dev-86f360c8ddaf3b60f61940a2e81e1cd5b1a78454
