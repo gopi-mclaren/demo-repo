@@ -1,10 +1,14 @@
 name: Release Cut
 
 # Manually triggered. Cuts one generic release/x.y.z branch across the
-# whole repository and builds every microservice under that single version
-# number, regardless of whether each one individually changed. This is the
-# only place a release version is assigned; every later promotion only
-# ever relabels what is built here.
+# whole repository and assigns every microservice the same version number.
+# Only services whose source under components/<svc> changed since the last
+# release are rebuilt; unchanged services are retag-forward — their existing
+# signed image (from the previous release version) is relabeled with the new
+# version, reusing the same digest, never rebuilt. A single v<x.y.z> git tag
+# marks each cut and is the diff anchor the next cut measures against. This
+# is the only place a release version is assigned; every later promotion
+# only ever relabels what is built here.
 
 on:
   workflow_dispatch:
@@ -41,17 +45,54 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build, sign, and push every service under this release version
+      - name: Determine previous release (diff anchor for change detection)
+        id: prev
         run: |
+          # The newest existing v* tag is the previous release. The new tag
+          # for THIS cut is not created until after the build below, so this
+          # never diffs a cut against itself.
+          PREV_TAG="$(git tag -l 'v*' --sort=-v:refname | head -1)"
+          echo "tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+          if [ -n "$PREV_TAG" ]; then
+            echo "Previous release tag: $PREV_TAG"
+          else
+            echo "No previous release tag — first cut; every service builds fresh."
+          fi
+
+      - name: Build changed services fresh; retag-forward unchanged ones
+        run: |
+          REPO="ghcr.io/${{ github.repository }}"
+          PREV_TAG="${{ steps.prev.outputs.tag }}"
+          PREV_VERSION="${PREV_TAG#v}"   # strip leading v -> image version label
+
           for svc in enrollment filemanagement reporting; do
-            echo "Building $svc for release ${{ inputs.version }}"
-            docker build -t "ghcr.io/${{ github.repository }}/$svc:${{ inputs.version }}" "components/$svc"
+            NEW="$REPO/$svc:${{ inputs.version }}"
 
-            echo "Simulating cosign signature for $svc:${{ inputs.version }}"
-            echo "  (a real pipeline signs the digest here with Sigstore/cosign before it is ever pushed)"
+            if [ -n "$PREV_TAG" ] && git diff --quiet "$PREV_TAG" HEAD -- "components/$svc"; then
+              # Unchanged since the last release: reuse the existing signed
+              # image. A retag keeps the same digest, so the cosign signature
+              # made at its original build stays valid.
+              SRC="$REPO/$svc:$PREV_VERSION"
+              echo "$svc unchanged since $PREV_TAG — retag-forward $SRC -> $NEW (no rebuild)"
+              docker pull "$SRC"
+              docker tag "$SRC" "$NEW"
+              docker push "$NEW"
+            else
+              # Changed (or first cut ever): build fresh and sign.
+              echo "Building $svc fresh for release ${{ inputs.version }}"
+              docker build -t "$NEW" "components/$svc"
 
-            docker push "ghcr.io/${{ github.repository }}/$svc:${{ inputs.version }}"
+              echo "Simulating cosign signature for $svc:${{ inputs.version }}"
+              echo "  (a real pipeline signs the digest here with Sigstore/cosign before it is ever pushed)"
+
+              docker push "$NEW"
+            fi
           done
+
+      - name: Tag this cut (single anchor for the next release's diff)
+        run: |
+          git tag "v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
 
       - name: Deploy release build to dev as a final sanity check (simulated)
         run: |
